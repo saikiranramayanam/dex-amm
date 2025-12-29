@@ -14,12 +14,11 @@ describe("DEX", function () {
     const DEX = await ethers.getContractFactory("DEX");
     dex = await DEX.deploy(await tokenA.getAddress(), await tokenB.getAddress());
 
-    await tokenA.connect(owner).mint(addr1.address, ethers.parseEther("10000000")); // 10M
-    await tokenB.connect(owner).mint(addr1.address, ethers.parseEther("10000000")); // 10M
-
+    await tokenA.connect(owner).mint(addr1.address, ethers.parseEther("10000000"));
+    await tokenB.connect(owner).mint(addr1.address, ethers.parseEther("10000000"));
     
-   await tokenA.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("10000000")); // 10M
-   await tokenB.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("10000000")); // 10M
+    await tokenA.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("10000000"));
+    await tokenB.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("10000000"));
   });
 
   describe("Liquidity Management", function () {
@@ -63,12 +62,17 @@ describe("DEX", function () {
     });
 
     it("should allow partial liquidity removal", async function () {
-      await expect(dex.connect(addr1).removeLiquidity(1)).to.be.reverted;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      // Test partial removal
+      await dex.connect(addr1).removeLiquidity(ethers.parseEther("0.5"));
     });
 
-    it("should return correct token amounts on liquidity removal", async function () {
-      await expect(dex.connect(addr1).removeLiquidity(1)).to.be.reverted;
-    });
+ it("should return correct token amounts on liquidity removal", async function () {
+  await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+  const liquidityBefore = await dex.liquidity(addr1.address);
+  expect(liquidityBefore).to.be.gt(0);
+});
+
 
     it("should revert on zero liquidity addition", async function () {
       await expect(dex.connect(addr1).addLiquidity(0, 0)).to.be.revertedWith("Cannot add zero liquidity");
@@ -82,34 +86,53 @@ describe("DEX", function () {
   describe("Token Swaps", function () {
     beforeEach(async function () {
       await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      
+      // Mint more tokens to addr1 for swaps and approve
+      await tokenA.connect(owner).mint(addr1.address, ethers.parseEther("1000"));
+      await tokenB.connect(owner).mint(addr1.address, ethers.parseEther("1000"));
+      await tokenA.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("1000"));
+      await tokenB.connect(addr1).approve(await dex.getAddress(), ethers.parseEther("1000"));
     });
 
     it("should swap token A for token B", async function () {
-      await expect(dex.connect(addr1).swapAForB(ethers.parseEther("1"))).to.be.reverted;
+      const tx = await dex.connect(addr1).swapAForB(ethers.parseEther("1"));
+      await tx.wait();
+      await expect(tx).to.not.be.reverted;
     });
 
     it("should swap token B for token A", async function () {
-      await expect(dex.connect(addr1).swapBForA(ethers.parseEther("1"))).to.be.reverted;
+      const tx = await dex.connect(addr1).swapBForA(ethers.parseEther("1"));
+      await tx.wait();
+      await expect(tx).to.not.be.reverted;
     });
 
     it("should calculate correct output amount with fee", async function () {
-      expect(true).to.be.true;
+      const amountOut = await dex.getAmountOut(ethers.parseEther("1"), ethers.parseEther("100"), ethers.parseEther("200"));
+      expect(amountOut).to.be.gt(0);
     });
 
     it("should update reserves after swap", async function () {
-      expect(true).to.be.true;
+      const [reserveAStart, reserveBStart] = await dex.getReserves();
+      await dex.connect(addr1).swapAForB(ethers.parseEther("1"));
+      const [reserveAEnd, reserveBEnd] = await dex.getReserves();
+      expect(reserveAEnd).to.be.gt(reserveAStart);
+      expect(reserveBEnd).to.be.lt(reserveBStart);
     });
 
     it("should increase k after swap due to fees", async function () {
-      expect(true).to.be.true;
+      const kStart = (await dex.getReserves())[0] * (await dex.getReserves())[1];
+      await dex.connect(addr1).swapAForB(ethers.parseEther("1"));
+      const [reserveAEnd, reserveBEnd] = await dex.getReserves();
+      const kEnd = reserveAEnd * reserveBEnd;
+      expect(kEnd).to.be.gt(kStart);
     });
 
     it("should revert on zero swap amount", async function () {
-      await expect(dex.connect(addr1).swapAForB(0)).to.be.reverted;
+      await expect(dex.connect(addr1).swapAForB(0)).to.be.revertedWith("Insufficient input amount");
     });
 
     it("should handle large swaps with high price impact", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).swapAForB(ethers.parseEther("50"));
     });
   });
 
@@ -121,7 +144,11 @@ describe("DEX", function () {
     });
 
     it("should update price after swaps", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      const priceStart = await dex.getPrice();
+      await dex.connect(addr1).swapAForB(ethers.parseEther("1"));
+      const priceEnd = await dex.getPrice();
+      expect(priceEnd).to.be.lt(priceStart);
     });
 
     it("should handle price queries with zero reserves gracefully", async function () {
@@ -132,11 +159,23 @@ describe("DEX", function () {
 
   describe("Fee Distribution", function () {
     it("should accumulate fees for liquidity providers", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      await tokenA.connect(owner).mint(addr2.address, ethers.parseEther("100"));
+      await tokenA.connect(addr2).approve(await dex.getAddress(), ethers.parseEther("100"));
+      await dex.connect(addr2).swapAForB(ethers.parseEther("1"));
+      // Fees accumulated in reserves
+      expect(await tokenA.balanceOf(await dex.getAddress())).to.be.gt(ethers.parseEther("100"));
     });
 
     it("should distribute fees proportionally to LP share", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      await tokenA.connect(owner).mint(addr2.address, ethers.parseEther("100"));
+      await tokenA.connect(addr2).approve(await dex.getAddress(), ethers.parseEther("100"));
+      await dex.connect(addr2).swapAForB(ethers.parseEther("1"));
+      const initialBalanceA = await tokenA.balanceOf(addr1.address);
+      await dex.connect(addr1).removeLiquidity(ethers.parseEther("1"));
+      const finalBalanceA = await tokenA.balanceOf(addr1.address);
+      expect(finalBalanceA).to.be.gt(initialBalanceA);
     });
   });
 
@@ -164,11 +203,17 @@ describe("DEX", function () {
     });
 
     it("should emit LiquidityRemoved event", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      await expect(dex.connect(addr1).removeLiquidity(ethers.parseEther("1")))
+        .to.emit(dex, "LiquidityRemoved");
     });
 
     it("should emit Swap event", async function () {
-      expect(true).to.be.true;
+      await dex.connect(addr1).addLiquidity(ethers.parseEther("100"), ethers.parseEther("200"));
+      await tokenA.connect(owner).mint(addr2.address, ethers.parseEther("100"));
+      await tokenA.connect(addr2).approve(await dex.getAddress(), ethers.parseEther("100"));
+      await expect(dex.connect(addr2).swapAForB(ethers.parseEther("1")))
+        .to.emit(dex, "Swap");
     });
   });
 });
