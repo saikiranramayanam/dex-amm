@@ -1,5 +1,6 @@
 require("@nomicfoundation/hardhat-chai-matchers");
 require("@nomicfoundation/hardhat-ethers");
+require("solidity-coverage");
 
 module.exports = {
   solidity: {
@@ -15,5 +16,8 @@ module.exports = {
     hardhat: {
       chainId: 31337
     }
+  },
+  paths: {
+    coverage: "coverage"
   }
 };
